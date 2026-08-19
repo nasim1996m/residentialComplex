@@ -1,0 +1,215 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN_STAFF
+  MAINTENANCE_WORKER
+  RESIDENT
+}
+
+enum BuildingStatus {
+  COMPLETED
+  UNDER_CONSTRUCTION
+}
+
+enum PaymentType {
+  FULL_CASH
+  INSTALLMENTS
+}
+
+enum OccupancyStatus {
+  VACANT_UNSOLD
+  VACANT_SOLD
+  OWNER_OCCUPIED
+  RENTED
+}
+
+enum TicketStatus {
+  PENDING
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+}
+
+model User {
+  id                  String               @id @default(uuid())
+  supabaseAuthId      String?              @unique
+  email               String               @unique
+  fullName            String
+  avatarUrl           String?
+  gender              String?
+  phone               String?
+  role                Role                 @default(RESIDENT)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  // Profiles
+  residentProfile     ResidentProfile?
+  staffProfile        StaffProfile?
+  workerProfile       WorkerProfile?
+}
+
+model Building {
+  id                  String               @id @default(uuid())
+  buildingNumber      Int                  @unique
+  name                String
+  status              BuildingStatus       @default(COMPLETED)
+  totalFloors         Int                  @default(5)
+  apartmentsPerFloor  Int                  @default(4)
+  totalApartments     Int                  @default(20)
+
+  apartments          Apartment[]
+}
+
+model Apartment {
+  id                  String               @id @default(uuid())
+  buildingId          String
+  building            Building             @relation(fields: [buildingId], references: [id])
+  floorNumber         Int
+  apartmentNumber     Int
+  sequentialCode      String               @unique // e.g. B01-F02-A07
+
+  // Sale & Ownership Attributes
+  isSold              Boolean              @default(false)
+  price               Float                @default(100000)
+  paymentType         PaymentType?
+  
+  // Occupancy Status
+  occupancyStatus     OccupancyStatus      @default(VACANT_UNSOLD)
+  isOccupied          Boolean              @default(false) // Triggers Subscription Eligibility
+
+  // Relations
+  residents           ResidentProfile[]
+  installments        Installment[]
+  subscriptions       Subscription[]
+  vehicles            Vehicle[]
+  garageSpots         GarageSpot[]
+  maintenanceTickets MaintenanceTicket[]
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model ResidentProfile {
+  id                  String               @id @default(uuid())
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id])
+  apartmentId         String?
+  apartment           Apartment?           @relation(fields: [apartmentId], references: [id])
+
+  isContractOwner     Boolean              @default(false)
+  idCardPhotoUrl      String?
+  residenceCardUrl    String?
+  hasAccessBadge      Boolean              @default(false)
+  badgeCode           String?
+  familyMembersCount  Int                  @default(1)
+
+  vehicles            Vehicle[]
+  createdAt           DateTime             @default(now())
+}
+
+model Vehicle {
+  id                  String               @id @default(uuid())
+  apartmentId         String
+  apartment           Apartment            @relation(fields: [apartmentId], references: [id], onDelete: Cascade)
+  residentId          String?
+  resident            ResidentProfile?     @relation(fields: [residentId], references: [id])
+  
+  plateNumber         String               @unique
+  makeModel           String
+  color               String?
+  rfidBadgeCode       String?
+  
+  createdAt           DateTime             @default(now())
+}
+
+model GarageSpot {
+  id                  String               @id @default(uuid())
+  apartmentId         String?
+  apartment           Apartment?           @relation(fields: [apartmentId], references: [id])
+  
+  spotNumber          String               @unique // e.g. G1-P104
+  zoneFloor           String
+  accessBarcode       String?
+  isOccupied          Boolean              @default(false)
+}
+
+model StaffProfile {
+  id                  String               @id @default(uuid())
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id])
+  department          String
+  isOnDuty            Boolean              @default(false)
+}
+
+model WorkerProfile {
+  id                  String               @id @default(uuid())
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id])
+  specialization      String
+  isAvailable         Boolean              @default(true)
+
+  tickets             MaintenanceTicket[]
+}
+
+model Service {
+  id                  String               @id @default(uuid())
+  name                String
+  monthlyPrice        Float
+  isAvailable         Boolean              @default(true)
+  
+  subscriptions       Subscription[]
+}
+
+model Subscription {
+  id                  String               @id @default(uuid())
+  apartmentId         String
+  apartment           Apartment            @relation(fields: [apartmentId], references: [id])
+  serviceId           String
+  service             Service              @relation(fields: [serviceId], references: [id])
+  
+  startDate           DateTime             @default(now())
+  isActive            Boolean              @default(true)
+  payments            Payment[]
+}
+
+model Installment {
+  id                  String               @id @default(uuid())
+  apartmentId         String
+  apartment           Apartment            @relation(fields: [apartmentId], references: [id])
+  dueDate             DateTime
+  amount              Float
+  isPaid              Boolean              @default(false)
+  paidAt              DateTime?
+}
+
+model Payment {
+  id                  String               @id @default(uuid())
+  subscriptionId      String?
+  subscription        Subscription?        @relation(fields: [subscriptionId], references: [id])
+  amount              Float
+  paymentDate         DateTime             @default(now())
+  receiptUrl          String?
+  notes               String?
+}
+
+model MaintenanceTicket {
+  id                  String               @id @default(uuid())
+  apartmentId         String
+  apartment           Apartment            @relation(fields: [apartmentId], references: [id])
+  workerId            String?
+  worker              WorkerProfile?       @relation(fields: [workerId], references: [id])
+  
+  title               String
+  description         String
+  status              TicketStatus         @default(PENDING)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
