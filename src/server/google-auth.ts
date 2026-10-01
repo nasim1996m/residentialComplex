@@ -6,9 +6,12 @@ import { createHash, randomBytes } from 'node:crypto';
 export const PKCE_COOKIE = 'rc_pkce';
 
 export function googleConfig() {
-  const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/+$/, '');
-  const anonKey = process.env.SUPABASE_ANON_KEY;
-  const appUrl = process.env.APP_URL?.replace(/\/+$/, '');
+  const env = process.env;
+  const supabaseUrl = (env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL)?.replace(/\/+$/, '');
+  const anonKey = env.SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  // On Vercel, fall back to the project's production domain when APP_URL is not set.
+  const vercelUrl = env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined;
+  const appUrl = (env.APP_URL || vercelUrl)?.replace(/\/+$/, '');
   if (!supabaseUrl || !anonKey || !appUrl) return null;
   return { supabaseUrl, anonKey, appUrl };
 }
