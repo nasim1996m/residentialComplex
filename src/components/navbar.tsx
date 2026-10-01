@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { Role } from '@/lib/types';
 import { Building2, ShieldCheck, UserCheck, Wrench, User, Sparkles } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
+import { GoogleAuthButton } from './google-auth-button';
 
 export function Navbar() {
   const { currentRole, setCurrentRole } = useApp();
@@ -69,26 +70,32 @@ export function Navbar() {
           </div>
         </div>
 
-        {/* Dynamic Role Switcher */}
-        <div className="flex items-center gap-2 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800">
-          <span className="text-xs font-bold text-gray-400 px-3 hidden md:inline">تبديل لوحة التحكم:</span>
-          {roleOptions.map((role) => {
-            const isActive = currentRole === role.id;
-            return (
-              <button
-                key={role.id}
-                onClick={() => handleRoleSelect(role.id, role.path)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
-                  isActive
-                    ? `bg-gradient-to-r ${role.color} text-white shadow-md shadow-blue-900/30 scale-[1.02]`
-                    : 'text-gray-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                {role.icon}
-                <span className="hidden sm:inline">{role.label}</span>
-              </button>
-            );
-          })}
+        {/* Right Section: Role Switcher & Google Login */}
+        <div className="flex items-center gap-3">
+          {/* Dynamic Role Switcher */}
+          <div className="flex items-center gap-2 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800">
+            <span className="text-xs font-bold text-gray-400 px-3 hidden md:inline">تبديل لوحة التحكم:</span>
+            {roleOptions.map((role) => {
+              const isActive = currentRole === role.id;
+              return (
+                <button
+                  key={role.id}
+                  onClick={() => handleRoleSelect(role.id, role.path)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
+                    isActive
+                      ? `bg-gradient-to-r ${role.color} text-white shadow-md shadow-blue-900/30 scale-[1.02]`
+                      : 'text-gray-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  {role.icon}
+                  <span className="hidden sm:inline">{role.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Google Auth Button */}
+          <GoogleAuthButton />
         </div>
 
       </div>
