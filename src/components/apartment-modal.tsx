@@ -27,7 +27,11 @@ export function ApartmentModal() {
     addVehicleToApartment,
     removeVehicleFromApartment,
     addGarageSpotToApartment,
+    payInstallment,
+    payCharge,
+    error,
   } = useApp();
+  const [busy, setBusy] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'DETAILS' | 'VEHICLES' | 'GARAGE' | 'FINANCIAL'>('DETAILS');
 
@@ -44,40 +48,43 @@ export function ApartmentModal() {
 
   const apt = selectedApartment;
 
-  const handleOccupancyChange = (newStatus: OccupancyStatus) => {
-    updateApartmentOccupancy(apt.id, newStatus);
+  // Errors are already surfaced through the store; this only tracks the in-flight state.
+  const act = async (fn: () => Promise<void>) => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      await fn();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleAddVehicle = (e: React.FormEvent) => {
+  const handleOccupancyChange = (newStatus: OccupancyStatus) => {
+    if (newStatus === apt.occupancyStatus) return;
+    act(() => updateApartmentOccupancy(apt.id, newStatus));
+  };
+
+  const handleAddVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPlate || !newModel) return;
-
-    addVehicleToApartment(apt.id, {
-      apartmentId: apt.id,
-      plateNumber: newPlate,
-      makeModel: newModel,
-      color: newColor || 'غير محدد',
-      rfidBadgeCode: `RFID-${Math.floor(100000 + Math.random() * 900000)}`,
-    });
-
-    setNewPlate('');
-    setNewModel('');
-    setNewColor('');
+    const ok = await act(() =>
+      addVehicleToApartment(apt.id, { plateNumber: newPlate, makeModel: newModel, color: newColor || undefined }),
+    );
+    if (ok) {
+      setNewPlate('');
+      setNewModel('');
+      setNewColor('');
+    }
   };
 
-  const handleAddGarage = (e: React.FormEvent) => {
+  const handleAddGarage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSpotNumber) return;
-
-    addGarageSpotToApartment(apt.id, {
-      apartmentId: apt.id,
-      spotNumber: newSpotNumber,
-      zoneFloor: newZoneFloor,
-      accessBarcode: `BAR-${Math.floor(100000 + Math.random() * 900000)}`,
-      isOccupied: apt.isOccupied,
-    });
-
-    setNewSpotNumber('');
+    const ok = await act(() => addGarageSpotToApartment(apt.id, { spotNumber: newSpotNumber, zoneFloor: newZoneFloor }));
+    if (ok) setNewSpotNumber('');
   };
 
   return (
@@ -158,6 +165,11 @@ export function ApartmentModal() {
 
         {/* Modal Content Body */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1">
+          {error && (
+            <div role="alert" className="p-3 bg-red-500/10 text-red-400 border border-red-500/30 rounded-xl text-xs font-bold">
+              {error}
+            </div>
+          )}
           
           {/* TAB 1: DETAILS & OCCUPANCY */}
           {activeTab === 'DETAILS' && (
@@ -258,9 +270,9 @@ export function ApartmentModal() {
                     </div>
 
                     <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
-                      <span className="text-gray-400 block mb-1">بطاقة السكن / الهوية</span>
+                      <span className="text-gray-400 block mb-1">باج الدخول</span>
                       <span className="font-bold text-green-400 flex items-center gap-1">
-                        <Check className="w-3.5 h-3.5" /> تم التدقيق والمصادقة
+                        <Check className="w-3.5 h-3.5" /> {apt.contractOwner.hasAccessBadge ? 'مفعّل' : 'غير مفعّل'}
                       </span>
                     </div>
 
@@ -316,7 +328,8 @@ export function ApartmentModal() {
                 </div>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/30"
+                  disabled={busy}
+                  className="px-5 py-2.5 disabled:opacity-60 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/30"
                 >
                   تسجيل السيارة وإصدار باج RFID
                 </button>
@@ -338,7 +351,7 @@ export function ApartmentModal() {
                             <Car className="w-4 h-4 text-amber-400" /> {v.makeModel}
                           </span>
                           <button
-                            onClick={() => removeVehicleFromApartment(apt.id, v.id)}
+                            onClick={() => act(() => removeVehicleFromApartment(v.id))}
                             className="text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
                             title="حذف السيارة"
                           >
@@ -392,7 +405,8 @@ export function ApartmentModal() {
                 </div>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/30"
+                  disabled={busy}
+                  className="px-5 py-2.5 disabled:opacity-60 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/30"
                 >
                   ربط وتخصيص موقف الكراج
                 </button>
@@ -433,7 +447,27 @@ export function ApartmentModal() {
           {/* TAB 4: FINANCIAL & SUBSCRIPTIONS */}
           {activeTab === 'FINANCIAL' && (
             <div className="space-y-6">
-              
+
+              {/* Balance overview */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                  <span className="text-gray-400 block mb-1">سعر الشقة</span>
+                  <span className="font-black text-white">${apt.price.toLocaleString()}</span>
+                </div>
+                <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                  <span className="text-gray-400 block mb-1">أقساط مدفوعة</span>
+                  <span className="font-black text-green-400">${apt.financials.paidInstallments.toLocaleString()}</span>
+                </div>
+                <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                  <span className="text-gray-400 block mb-1">المتبقي من الأقساط</span>
+                  <span className="font-black text-amber-400">${apt.financials.remainingInstallments.toLocaleString()}</span>
+                </div>
+                <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                  <span className="text-gray-400 block mb-1">اشتراكات غير مدفوعة</span>
+                  <span className="font-black text-red-400">${apt.financials.unpaidChargesTotal.toLocaleString()}</span>
+                </div>
+              </div>
+
               {/* Active Subscriptions Dues */}
               <div className="glass-card p-5 rounded-2xl space-y-4">
                 <h3 className="text-xs font-black text-blue-400 uppercase tracking-wider flex items-center gap-2">
@@ -457,20 +491,45 @@ export function ApartmentModal() {
                     ))}
                   </div>
                 )}
+
+                {apt.unpaidCharges.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <h4 className="text-xs font-bold text-red-400">فواتير اشتراك غير مدفوعة ({apt.unpaidCharges.length})</h4>
+                    {apt.unpaidCharges.map((c) => (
+                      <div key={c.id} className="flex items-center justify-between bg-slate-900/80 p-3 rounded-xl border border-slate-800 text-xs">
+                        <span className="text-white">
+                          {c.serviceName} - <span className="font-mono">{c.period}</span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-red-400">${c.amount}</span>
+                          <button
+                            disabled={busy}
+                            onClick={() => act(() => payCharge(c.id))}
+                            className="px-3 py-1 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white rounded-lg font-bold"
+                          >
+                            تسجيل الدفع
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Installment Plan Breakdown */}
               {apt.paymentType === 'INSTALLMENTS' && (
                 <div className="glass-card p-5 rounded-2xl space-y-4">
                   <h3 className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
-                    <CreditCard className="w-4 h-4" /> جدول أقساط الشقة
+                    <CreditCard className="w-4 h-4" /> جدول أقساط الشقة ({apt.installmentMonths} شهر، دفعة مقدمة ${(apt.downPayment ?? 0).toLocaleString()})
                   </h3>
 
                   <div className="space-y-2">
                     {apt.installments.map((inst) => (
                       <div key={inst.id} className="flex items-center justify-between bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 text-xs">
                         <div>
-                          <span className="font-bold text-white block">القسط المستحق: ${inst.amount.toLocaleString()}</span>
+                          <span className="font-bold text-white block">
+                            القسط {inst.sequenceNumber}: ${inst.amount.toLocaleString()}
+                          </span>
                           <span className="text-[11px] text-gray-400">تاريخ الاستحقاق: {inst.dueDate}</span>
                         </div>
 
@@ -479,9 +538,13 @@ export function ApartmentModal() {
                             <CheckCircle2 className="w-3.5 h-3.5" /> تم السداد ({inst.paidAt})
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 text-xs font-bold border border-amber-500/20">
-                            قيد الانتظار
-                          </span>
+                          <button
+                            disabled={busy}
+                            onClick={() => act(() => payInstallment(inst.id))}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-green-600 hover:text-white disabled:opacity-60 text-xs font-bold border border-amber-500/20"
+                          >
+                            قيد الانتظار - تسجيل الدفع
+                          </button>
                         )}
                       </div>
                     ))}
