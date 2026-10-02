@@ -3,6 +3,9 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { BuildingGrid } from '@/components/building-grid';
+import { CredentialsNotice } from '@/components/credentials-notice';
+import { currentPeriod } from '@/lib/api';
+import type { Credentials } from '@/lib/types';
 import {
   Building2,
   DollarSign,
@@ -16,7 +19,7 @@ import {
   UserPlus,
   Home,
   X,
-  RotateCcw,
+  Receipt,
 } from 'lucide-react';
 
 export function AdminPortal() {
@@ -29,8 +32,14 @@ export function AdminPortal() {
     toggleServiceAvailability,
     toggleStaffDuty,
     registerApartmentSale,
-    resetToEmptyState,
+    generateCharges,
+    summary,
+    error,
   } = useApp();
+
+  const [credentials, setCredentials] = useState<Credentials | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [billingResult, setBillingResult] = useState<string | null>(null);
 
   // Modal states for adding staff
   const [showStaffModal, setShowStaffModal] = useState(false);
@@ -39,6 +48,7 @@ export function AdminPortal() {
   const [staffPhone, setStaffPhone] = useState('');
   const [staffGender, setStaffGender] = useState('ذكر');
   const [staffDepartment, setStaffDepartment] = useState('قسم الحسابات والاشتراكات');
+  const staffKind = staffDepartment === 'صيانة عامة وفريلانس' ? 'WORKER' : 'STAFF';
 
   // Modal states for registering apartment sale/lease
   const [showSaleModal, setShowSaleModal] = useState(false);
@@ -49,6 +59,9 @@ export function AdminPortal() {
   const [resGender, setResGender] = useState('ذكر');
   const [paymentType, setPaymentType] = useState<'FULL_CASH' | 'INSTALLMENTS'>('FULL_CASH');
   const [occupancyStatus, setOccupancyStatus] = useState<'OWNER_OCCUPIED' | 'RENTED' | 'VACANT_SOLD'>('OWNER_OCCUPIED');
+  const [familyCount, setFamilyCount] = useState(1);
+  const [downPayment, setDownPayment] = useState(20000);
+  const [installmentMonths, setInstallmentMonths] = useState(24);
 
   // Flatten all apartments
   const allApartments = buildings.flatMap((b) => b.apartments);
@@ -56,65 +69,75 @@ export function AdminPortal() {
   let totalApartments = 0;
   let occupiedCount = 0;
   let vacantSoldCount = 0;
-  let totalRevenue = 0;
 
   buildings.forEach((b) => {
     b.apartments.forEach((apt) => {
       totalApartments++;
       if (apt.isOccupied) occupiedCount++;
       if (apt.occupancyStatus === 'VACANT_SOLD') vacantSoldCount++;
-      if (apt.isSold) totalRevenue += apt.price;
     });
   });
 
   const occupancyRate = totalApartments > 0 ? Math.round((occupiedCount / totalApartments) * 100) : 0;
 
-  const handleAddStaffSubmit = (e: React.FormEvent) => {
+  const handleAddStaffSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!staffName || !staffPhone) return;
-
-    addStaffMember({
-      fullName: staffName,
-      email: staffEmail || `${Date.now()}@complex.com`,
-      phone: staffPhone,
-      gender: staffGender,
-      department: staffDepartment,
-      avatarUrl: staffGender === 'ذكر'
-        ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150'
-        : 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-    });
-
-    setStaffName('');
-    setStaffEmail('');
-    setStaffPhone('');
-    setShowStaffModal(false);
+    if (!staffName || !staffPhone || !staffEmail || busy) return;
+    setBusy(true);
+    try {
+      const creds = await addStaffMember({
+        fullName: staffName,
+        email: staffEmail,
+        phone: staffPhone,
+        gender: staffGender,
+        kind: staffKind,
+        department: staffDepartment,
+      });
+      setCredentials(creds);
+      setStaffName('');
+      setStaffEmail('');
+      setStaffPhone('');
+      setShowStaffModal(false);
+    } catch {
+      // error shown via store
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleRegisterSaleSubmit = (e: React.FormEvent) => {
+  const handleRegisterSaleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedAptId || !resName || !resPhone) return;
+    if (!selectedAptId || !resName || !resPhone || !resEmail || busy) return;
+    setBusy(true);
+    try {
+      const creds = await registerApartmentSale({
+        apartmentId: selectedAptId,
+        buyer: { fullName: resName, email: resEmail, phone: resPhone, gender: resGender, familyMembersCount: familyCount },
+        paymentType,
+        occupancyStatus,
+        ...(paymentType === 'INSTALLMENTS' ? { downPayment, installmentMonths } : {}),
+      });
+      setCredentials(creds);
+      setResName('');
+      setResEmail('');
+      setResPhone('');
+      setSelectedAptId('');
+      setShowSaleModal(false);
+    } catch {
+      // error shown via store
+    } finally {
+      setBusy(false);
+    }
+  };
 
-    registerApartmentSale(
-      selectedAptId,
-      {
-        fullName: resName,
-        email: resEmail || `resident.${Date.now()}@complex.com`,
-        phone: resPhone,
-        gender: resGender,
-        isContractOwner: true,
-        familyMembersCount: 2,
-        hasAccessBadge: true,
-        badgeCode: `RFID-PASS-${Math.floor(100000 + Math.random() * 900000)}`,
-      },
-      paymentType,
-      occupancyStatus
-    );
-
-    setResName('');
-    setResEmail('');
-    setResPhone('');
-    setSelectedAptId('');
-    setShowSaleModal(false);
+  const handleGenerateCharges = async () => {
+    try {
+      const period = currentPeriod();
+      const r = await generateCharges(period);
+      setBillingResult(`تم إصدار ${r.created} فاتورة اشتراك جديدة لشهر ${period} (من أصل ${r.eligibleSubscriptions} اشتراك فعّال)`);
+    } catch {
+      // error shown via store
+    }
   };
 
   return (
@@ -126,7 +149,7 @@ export function AdminPortal() {
           <h2 className="text-2xl font-black text-white flex items-center gap-2">
             <ShieldCheck className="w-7 h-7 text-blue-400" /> لوحة تحكم مالك المجمع (Super Admin)
           </h2>
-          <p className="text-sm text-gray-400 mt-1">المجمع خالٍ وجاهز - يمكنك إضافة الموظفين وتسجيل بيع وتأجير الشقق بنفسك</p>
+          <p className="text-sm text-gray-400 mt-1">إدارة البيع والأقساط والاشتراكات والموظفين - كل البيانات محفوظة في قاعدة البيانات</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -145,28 +168,38 @@ export function AdminPortal() {
           </button>
 
           <button
-            onClick={resetToEmptyState}
-            className="p-2.5 bg-slate-900 border border-slate-800 text-gray-400 hover:text-white rounded-xl text-xs font-bold transition-all"
-            title="تفريغ كافة البيانات وإعادة الضبط"
+            onClick={handleGenerateCharges}
+            className="px-4 py-2.5 bg-slate-900 border border-slate-800 text-gray-300 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2"
+            title="إصدار فواتير الاشتراكات الشهرية للشقق المسكونة"
           >
-            <RotateCcw className="w-4 h-4" />
+            <Receipt className="w-4 h-4" /> إصدار فواتير الشهر
           </button>
         </div>
       </div>
 
+      {credentials && <CredentialsNotice credentials={credentials} onClose={() => setCredentials(null)} />}
+      {billingResult && (
+        <div className="p-3 bg-blue-500/10 text-blue-300 border border-blue-500/30 rounded-xl text-xs font-bold flex justify-between">
+          <span>{billingResult}</span>
+          <button onClick={() => setBillingResult(null)}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* KPI Overview Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
         
         <div className="glass-card p-5 rounded-2xl space-y-2 border-slate-800">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-gray-400">إجمالي المبيعات والإيرادات</span>
+            <span className="text-xs font-bold text-gray-400">قيمة المبيعات / المحصّل فعلياً</span>
             <div className="w-9 h-9 rounded-xl bg-green-500/10 text-green-400 flex items-center justify-center">
               <DollarSign className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-2xl font-black text-white">${totalRevenue.toLocaleString()}</p>
+          <p className="text-2xl font-black text-white">${(summary?.totalSalesValue ?? 0).toLocaleString()}</p>
           <p className="text-xs text-green-400 font-semibold flex items-center gap-1">
-            {allApartments.filter((a) => a.isSold).length} شقة مباعة مسجلة
+            محصّل: ${(summary?.totalCollected ?? 0).toLocaleString()} | {summary?.soldApartments ?? 0} شقة مباعة
           </p>
         </div>
 
@@ -192,6 +225,19 @@ export function AdminPortal() {
           </div>
           <p className="text-2xl font-black text-white">{vacantSoldCount} شقة</p>
           <p className="text-xs text-amber-400 font-semibold">معفاة من اشتراكات الخدمات اليومية</p>
+        </div>
+
+        <div className="glass-card p-5 rounded-2xl space-y-2 border-slate-800">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-gray-400">أقساط متبقية / متأخرة</span>
+            <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-400 flex items-center justify-center">
+              <DollarSign className="w-5 h-5" />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-white">${(summary?.outstandingInstallments.amount ?? 0).toLocaleString()}</p>
+          <p className="text-xs text-red-400 font-semibold">
+            {summary?.overdueInstallments.count ?? 0} قسط متأخر | اشتراكات غير مدفوعة: ${(summary?.unpaidSubscriptionCharges.amount ?? 0).toLocaleString()}
+          </p>
         </div>
 
         <div className="glass-card p-5 rounded-2xl space-y-2 border-slate-800">
@@ -241,23 +287,25 @@ export function AdminPortal() {
             <div className="p-8 text-center text-xs text-gray-500 space-y-2">
               <Users className="w-8 h-8 text-gray-600 mx-auto" />
               <p className="font-bold text-white">لا يوجد موظفون مضافون حالياً</p>
-              <p>قم بالنقر على "إضافة موظف جديد" في الأعلى لإدخال كادرك الإداري والفني.</p>
+              <p>قم بالنقر على &quot;إضافة موظف جديد&quot; في الأعلى لإدخال كادرك الإداري والفني.</p>
             </div>
           ) : (
             <div className="space-y-3">
               {staff.map((s) => (
                 <div key={s.id} className="flex items-center justify-between bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
                   <div className="flex items-center gap-3">
-                    <img src={s.avatarUrl} alt={s.fullName} className="w-10 h-10 rounded-xl object-cover" />
+                    <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-sm font-black text-blue-300">
+                      {s.fullName.charAt(0)}
+                    </div>
                     <div>
                       <h5 className="text-xs font-black text-white">{s.fullName}</h5>
-                      <p className="text-[11px] text-gray-400">{s.department} | {s.phone}</p>
+                      <p className="text-[11px] text-gray-400">{s.department} | {s.phone} | {s.email}</p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => toggleStaffDuty(s.id)}
+                      onClick={() => toggleStaffDuty(s.id).catch(() => {})}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                         s.isOnDuty
                           ? 'bg-green-500/20 text-green-400 border border-green-500/30'
@@ -268,7 +316,9 @@ export function AdminPortal() {
                     </button>
 
                     <button
-                      onClick={() => removeStaffMember(s.id)}
+                      onClick={() => {
+                        if (confirm(`تعطيل حساب ${s.fullName}؟`)) removeStaffMember(s.id).catch(() => {});
+                      }}
                       className="p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                       title="حذف الموظف"
                     >
@@ -295,13 +345,15 @@ export function AdminPortal() {
               <div key={srv.id} className="flex items-center justify-between bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
                 <div>
                   <h5 className="text-xs font-black text-white">{srv.name}</h5>
-                  <p className="text-[11px] text-gray-400">يتم تفعيلها تلقائياً على الشقق المسكونة</p>
+                  <p className="text-[11px] text-gray-400">
+                    {srv.isDefault ? 'تُفعّل تلقائياً على الشقق المسكونة' : 'خدمة اختيارية'} | {srv.subscribedCount} شقة مشتركة
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <span className="text-xs font-black text-green-400">${srv.monthlyPrice} / شهرياً</span>
                   <button
-                    onClick={() => toggleServiceAvailability(srv.id)}
+                    onClick={() => toggleServiceAvailability(srv.id).catch(() => {})}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       srv.isAvailable
                         ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
@@ -364,6 +416,7 @@ export function AdminPortal() {
                   value={staffEmail}
                   onChange={(e) => setStaffEmail(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  required
                 />
               </div>
 
@@ -395,9 +448,12 @@ export function AdminPortal() {
                 </div>
               </div>
 
+              {error && <p className="text-xs text-red-400 font-bold">{error}</p>}
+
               <button
                 type="submit"
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-blue-600/30 mt-2"
+                disabled={busy}
+                className="w-full py-2.5 disabled:opacity-60 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-blue-600/30 mt-2"
               >
                 تسجيل الموظف وتفعيل حسابه
               </button>
@@ -429,7 +485,7 @@ export function AdminPortal() {
                   required
                 >
                   <option value="">-- اختر شقة فارغة --</option>
-                  {allApartments.map((a) => (
+                  {allApartments.filter((a) => !a.isSold).map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.sequentialCode} (بناية {a.buildingNumber} - طابق {a.floorNumber}) - ${a.price.toLocaleString()}
                     </option>
@@ -470,6 +526,7 @@ export function AdminPortal() {
                     value={resEmail}
                     onChange={(e) => setResEmail(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none"
+                    required
                   />
                 </div>
               </div>
@@ -479,7 +536,7 @@ export function AdminPortal() {
                   <label className="text-xs font-bold text-gray-300 block mb-1">نظام الدفع:</label>
                   <select
                     value={paymentType}
-                    onChange={(e) => setPaymentType(e.target.value as any)}
+                    onChange={(e) => setPaymentType(e.target.value as 'FULL_CASH' | 'INSTALLMENTS')}
                     className="w-full bg-slate-950 border border-slate-800 text-white rounded-xl px-3.5 py-2.5 text-xs focus:outline-none"
                   >
                     <option value="FULL_CASH">دفعة كاملة (Cash)</option>
@@ -491,7 +548,7 @@ export function AdminPortal() {
                   <label className="text-xs font-bold text-gray-300 block mb-1">حالة السكن الحالية:</label>
                   <select
                     value={occupancyStatus}
-                    onChange={(e) => setOccupancyStatus(e.target.value as any)}
+                    onChange={(e) => setOccupancyStatus(e.target.value as 'OWNER_OCCUPIED' | 'RENTED' | 'VACANT_SOLD')}
                     className="w-full bg-slate-950 border border-slate-800 text-white rounded-xl px-3.5 py-2.5 text-xs focus:outline-none"
                   >
                     <option value="OWNER_OCCUPIED">مسكونة بواسطة المالك (تستحق الخدمة)</option>
@@ -501,9 +558,65 @@ export function AdminPortal() {
                 </div>
               </div>
 
+              {paymentType === 'INSTALLMENTS' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs font-bold text-gray-300 block mb-1">الدفعة المقدمة ($):</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={downPayment}
+                      onChange={(e) => setDownPayment(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-300 block mb-1">عدد الأقساط الشهرية:</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={360}
+                      value={installmentMonths}
+                      onChange={(e) => setInstallmentMonths(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none"
+                      required
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-bold text-gray-300 block mb-1">الجنس:</label>
+                  <select
+                    value={resGender}
+                    onChange={(e) => setResGender(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-white rounded-xl px-3.5 py-2.5 text-xs focus:outline-none"
+                  >
+                    <option value="ذكر">ذكر</option>
+                    <option value="أنثى">أنثى</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-300 block mb-1">عدد أفراد العائلة:</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={familyCount}
+                    onChange={(e) => setFamilyCount(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {error && <p className="text-xs text-red-400 font-bold">{error}</p>}
+
               <button
                 type="submit"
-                className="w-full py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-green-600/30 mt-2"
+                disabled={busy}
+                className="w-full py-2.5 disabled:opacity-60 bg-green-600 hover:bg-green-500 text-white font-bold text-xs rounded-xl transition-all shadow-md shadow-green-600/30 mt-2"
               >
                 إتمام العقد وتفعيل العضوية والاشتراك
               </button>

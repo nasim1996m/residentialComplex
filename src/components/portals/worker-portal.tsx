@@ -6,6 +6,7 @@ import { Wrench, CheckCircle2, Clock, AlertTriangle, Building, Phone } from 'luc
 
 export function WorkerPortal() {
   const { tickets, updateTicketStatus } = useApp();
+  const setStatus = (id: string, status: 'IN_PROGRESS' | 'RESOLVED') => updateTicketStatus(id, status).catch(() => {});
 
   return (
     <div className="space-y-8 pb-16">
@@ -20,7 +21,7 @@ export function WorkerPortal() {
         </div>
 
         <div className="bg-amber-500/10 border border-amber-500/20 px-4 py-2 rounded-2xl text-xs font-bold text-amber-400">
-          عدد الطلبات النشطة: {tickets.filter((t) => t.status !== 'RESOLVED').length} بلاغات
+          عدد الطلبات النشطة: {tickets.filter((t) => t.status === 'PENDING' || t.status === 'IN_PROGRESS').length} بلاغات
         </div>
       </div>
 
@@ -54,6 +55,11 @@ export function WorkerPortal() {
                         قيد التنفيذ الميداني
                       </span>
                     )}
+                    {t.status === 'CANCELLED' && (
+                      <span className="text-[10px] font-bold bg-gray-500/10 text-gray-400 border border-gray-500/20 px-2 py-0.5 rounded">
+                        ملغي
+                      </span>
+                    )}
                     {t.status === 'RESOLVED' && (
                       <span className="text-[10px] font-bold bg-green-500/10 text-green-400 border border-green-500/20 px-2 py-0.5 rounded">
                         مكتمل ومستلم
@@ -68,22 +74,22 @@ export function WorkerPortal() {
                 <div className="pt-3 border-t border-slate-800/80 space-y-3">
                   <div className="text-[11px] text-gray-500 flex items-center justify-between">
                     <span>الفني الموكل: <strong className="text-gray-300">{t.workerName || 'غير محدد'}</strong></span>
-                    <span>{t.createdAt}</span>
+                    <span>{new Date(t.createdAt).toLocaleString('ar-IQ')}</span>
                   </div>
 
                   {/* Status Toggle Buttons */}
                   <div className="flex items-center gap-2">
-                    {t.status !== 'IN_PROGRESS' && (
+                    {t.status === 'PENDING' && (
                       <button
-                        onClick={() => updateTicketStatus(t.id, 'IN_PROGRESS')}
+                        onClick={() => setStatus(t.id, 'IN_PROGRESS')}
                         className="flex-1 py-2 bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white rounded-xl text-xs font-bold transition-all border border-blue-500/30"
                       >
                         بدء التنفيذ
                       </button>
                     )}
-                    {t.status !== 'RESOLVED' && (
+                    {t.status === 'IN_PROGRESS' && (
                       <button
-                        onClick={() => updateTicketStatus(t.id, 'RESOLVED')}
+                        onClick={() => setStatus(t.id, 'RESOLVED')}
                         className="flex-1 py-2 bg-green-600 hover:bg-green-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-green-600/20"
                       >
                         تم الإنجاز ✓

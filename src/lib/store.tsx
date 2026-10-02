@@ -1,331 +1,180 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Building, Role, Service, StaffProfile, MaintenanceTicket, Apartment, Vehicle, GarageSpot, ResidentProfile } from './types';
-import { generateInitialBuildings, INITIAL_SERVICES } from './mock-data';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { api } from './api';
+import type {
+  Apartment,
+  Building,
+  Credentials,
+  FinancialSummary,
+  MaintenanceTicket,
+  Me,
+  OccupancyStatus,
+  Service,
+  StaffMember,
+  TicketStatus,
+} from './types';
+
+export interface SaleInput {
+  apartmentId: string;
+  buyer: { fullName: string; email: string; phone: string; gender: string; familyMembersCount: number };
+  paymentType: 'FULL_CASH' | 'INSTALLMENTS';
+  occupancyStatus: 'OWNER_OCCUPIED' | 'RENTED' | 'VACANT_SOLD';
+  downPayment?: number;
+  installmentMonths?: number;
+}
+
+export interface StaffInput {
+  fullName: string;
+  email: string;
+  phone: string;
+  gender: string;
+  kind: 'STAFF' | 'WORKER';
+  department: string;
+}
 
 interface AppContextType {
-  currentRole: Role;
-  setCurrentRole: (role: Role) => void;
+  me: Me;
+  loading: boolean;
+  error: string | null;
+  setError: (e: string | null) => void;
   buildings: Building[];
+  myApartment: Apartment | null;
   services: Service[];
-  staff: StaffProfile[];
+  staff: StaffMember[];
   tickets: MaintenanceTicket[];
+  summary: FinancialSummary | null;
   selectedBuildingId: string;
   setSelectedBuildingId: (id: string) => void;
   selectedApartment: Apartment | null;
   setSelectedApartment: (apt: Apartment | null) => void;
-  updateApartmentOccupancy: (aptId: string, status: Apartment['occupancyStatus']) => void;
-  registerApartmentSale: (aptId: string, resident: Omit<ResidentProfile, 'id' | 'userId'>, paymentType: 'FULL_CASH' | 'INSTALLMENTS', occupancyStatus: Apartment['occupancyStatus']) => void;
-  addVehicleToApartment: (aptId: string, vehicle: Omit<Vehicle, 'id'>) => void;
-  removeVehicleFromApartment: (aptId: string, vehicleId: string) => void;
-  addGarageSpotToApartment: (aptId: string, spot: Omit<GarageSpot, 'id'>) => void;
-  addStaffMember: (staffData: Omit<StaffProfile, 'id' | 'isOnDuty'>) => void;
-  removeStaffMember: (staffId: string) => void;
-  toggleStaffDuty: (staffId: string) => void;
-  createMaintenanceTicket: (ticket: Omit<MaintenanceTicket, 'id' | 'createdAt'>) => void;
-  updateTicketStatus: (ticketId: string, status: MaintenanceTicket['status']) => void;
-  toggleServiceAvailability: (serviceId: string) => void;
-  resetToEmptyState: () => void;
+  refresh: () => Promise<void>;
+  registerApartmentSale: (input: SaleInput) => Promise<Credentials>;
+  updateApartmentOccupancy: (aptId: string, status: OccupancyStatus) => Promise<void>;
+  addVehicleToApartment: (aptId: string, v: { plateNumber: string; makeModel: string; color?: string }) => Promise<void>;
+  removeVehicleFromApartment: (vehicleId: string) => Promise<void>;
+  addGarageSpotToApartment: (aptId: string, g: { spotNumber: string; zoneFloor: string }) => Promise<void>;
+  payInstallment: (installmentId: string) => Promise<void>;
+  payCharge: (chargeId: string) => Promise<void>;
+  generateCharges: (period: string) => Promise<{ created: number; eligibleSubscriptions: number }>;
+  addStaffMember: (input: StaffInput) => Promise<Credentials>;
+  removeStaffMember: (userId: string) => Promise<void>;
+  toggleStaffDuty: (userId: string) => Promise<void>;
+  toggleServiceAvailability: (serviceId: string) => Promise<void>;
+  createMaintenanceTicket: (t: { title: string; description: string; apartmentId?: string }) => Promise<void>;
+  updateTicketStatus: (ticketId: string, status: TicketStatus) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [currentRole, setCurrentRole] = useState<Role>('SUPER_ADMIN');
+export function AppProvider({ me, children }: { me: Me; children: React.ReactNode }) {
+  const isManagement = me.role === 'SUPER_ADMIN' || me.role === 'ADMIN_STAFF';
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [buildings, setBuildings] = useState<Building[]>([]);
-  const [services, setServices] = useState<Service[]>(INITIAL_SERVICES);
-  const [staff, setStaff] = useState<StaffProfile[]>([]);
+  const [myApartment, setMyApartment] = useState<Apartment | null>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
   const [tickets, setTickets] = useState<MaintenanceTicket[]>([]);
-  const [selectedBuildingId, setSelectedBuildingId] = useState<string>('building-1');
-  const [selectedApartment, setSelectedApartment] = useState<Apartment | null>(null);
+  const [summary, setSummary] = useState<FinancialSummary | null>(null);
+  const [selectedBuildingId, setSelectedBuildingId] = useState('');
+  const [selectedApartmentId, setSelectedApartmentId] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const jobs: Promise<unknown>[] = [
+        api<Service[]>('/api/services').then(setServices),
+        api<MaintenanceTicket[]>('/api/tickets').then(setTickets),
+      ];
+      if (isManagement) {
+        jobs.push(
+          api<Building[]>('/api/buildings').then((b) => {
+            setBuildings(b);
+            setSelectedBuildingId((cur) => cur || b[0]?.id || '');
+          }),
+          api<StaffMember[]>('/api/staff').then(setStaff),
+          api<FinancialSummary>('/api/finance/summary').then(setSummary),
+        );
+      }
+      if (me.role === 'RESIDENT') jobs.push(api<Apartment | null>('/api/me/apartment').then(setMyApartment));
+      await Promise.all(jobs);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [isManagement, me.role]);
 
   useEffect(() => {
-    // Generate empty initial buildings matrix
-    const initial = generateInitialBuildings();
-    setBuildings(initial);
-  }, []);
+    // Initial load from the API; state is only set after the requests resolve.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refresh();
+  }, [refresh]);
 
-  const resetToEmptyState = () => {
-    setBuildings(generateInitialBuildings());
-    setStaff([]);
-    setTickets([]);
-    setSelectedApartment(null);
-  };
-
-  const addStaffMember = (staffData: Omit<StaffProfile, 'id' | 'isOnDuty'>) => {
-    const newStaff: StaffProfile = {
-      ...staffData,
-      id: `st-${Date.now()}`,
-      isOnDuty: true,
-      avatarUrl: staffData.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-    };
-    setStaff((prev) => [...prev, newStaff]);
-  };
-
-  const removeStaffMember = (staffId: string) => {
-    setStaff((prev) => prev.filter((s) => s.id !== staffId));
-  };
-
-  const registerApartmentSale = (
-    aptId: string,
-    residentData: Omit<ResidentProfile, 'id' | 'userId'>,
-    paymentType: 'FULL_CASH' | 'INSTALLMENTS',
-    occupancyStatus: Apartment['occupancyStatus']
-  ) => {
-    setBuildings((prevBuildings) =>
-      prevBuildings.map((b) => ({
-        ...b,
-        apartments: b.apartments.map((apt) => {
-          if (apt.id === aptId) {
-            const isOccupied = occupancyStatus === 'OWNER_OCCUPIED' || occupancyStatus === 'RENTED';
-            
-            const newResident: ResidentProfile = {
-              ...residentData,
-              id: `res-${Date.now()}`,
-              userId: `user-${Date.now()}`,
-            };
-
-            const defaultSubscriptions = isOccupied ? [
-              {
-                id: `sub-${apt.id}-1`,
-                apartmentId: apt.id,
-                serviceId: 'srv-1',
-                serviceName: 'الحراسة والأمن (Security)',
-                monthlyPrice: 50,
-                startDate: new Date().toISOString().split('T')[0],
-                isActive: true,
-              },
-              {
-                id: `sub-${apt.id}-2`,
-                apartmentId: apt.id,
-                serviceId: 'srv-2',
-                serviceName: 'النظافة العامة وتجميع النفايات',
-                monthlyPrice: 40,
-                startDate: new Date().toISOString().split('T')[0],
-                isActive: true,
-              },
-              {
-                id: `sub-${apt.id}-3`,
-                apartmentId: apt.id,
-                serviceId: 'srv-3',
-                serviceName: 'صيانة المصاعد الكهروميكانيكية',
-                monthlyPrice: 60,
-                startDate: new Date().toISOString().split('T')[0],
-                isActive: true,
-              },
-            ] : [];
-
-            const installments = paymentType === 'INSTALLMENTS' ? [
-              { id: `inst-${apt.id}-1`, apartmentId: apt.id, dueDate: '2026-09-01', amount: 5000, isPaid: false },
-              { id: `inst-${apt.id}-2`, apartmentId: apt.id, dueDate: '2026-10-01', amount: 5000, isPaid: false },
-              { id: `inst-${apt.id}-3`, apartmentId: apt.id, dueDate: '2026-11-01', amount: 5000, isPaid: false },
-            ] : [];
-
-            const updatedApt: Apartment = {
-              ...apt,
-              isSold: true,
-              paymentType,
-              occupancyStatus,
-              isOccupied,
-              contractOwner: newResident,
-              subscriptions: defaultSubscriptions,
-              installments,
-            };
-
-            if (selectedApartment?.id === aptId) {
-              setSelectedApartment(updatedApt);
-            }
-            return updatedApt;
-          }
-          return apt;
-        }),
-      }))
-    );
-  };
-
-  const updateApartmentOccupancy = (aptId: string, status: Apartment['occupancyStatus']) => {
-    setBuildings((prevBuildings) =>
-      prevBuildings.map((b) => ({
-        ...b,
-        apartments: b.apartments.map((apt) => {
-          if (apt.id === aptId) {
-            const isOccupied = status === 'OWNER_OCCUPIED' || status === 'RENTED';
-            const updatedApt = {
-              ...apt,
-              occupancyStatus: status,
-              isOccupied,
-              subscriptions: isOccupied && apt.subscriptions.length === 0 ? [
-                {
-                  id: `sub-${apt.id}-1`,
-                  apartmentId: apt.id,
-                  serviceId: 'srv-1',
-                  serviceName: 'الحراسة والأمن (Security)',
-                  monthlyPrice: 50,
-                  startDate: new Date().toISOString().split('T')[0],
-                  isActive: true,
-                },
-                {
-                  id: `sub-${apt.id}-2`,
-                  apartmentId: apt.id,
-                  serviceId: 'srv-2',
-                  serviceName: 'النظافة العامة وتجميع النفايات',
-                  monthlyPrice: 40,
-                  startDate: new Date().toISOString().split('T')[0],
-                  isActive: true,
-                },
-                {
-                  id: `sub-${apt.id}-3`,
-                  apartmentId: apt.id,
-                  serviceId: 'srv-3',
-                  serviceName: 'صيانة المصاعد الكهروميكانيكية',
-                  monthlyPrice: 60,
-                  startDate: new Date().toISOString().split('T')[0],
-                  isActive: true,
-                },
-              ] : apt.subscriptions,
-            };
-            if (selectedApartment?.id === aptId) {
-              setSelectedApartment(updatedApt);
-            }
-            return updatedApt;
-          }
-          return apt;
-        }),
-      }))
-    );
-  };
-
-  const addVehicleToApartment = (aptId: string, vehicleData: Omit<Vehicle, 'id'>) => {
-    const newVehicle: Vehicle = {
-      ...vehicleData,
-      id: `veh-${Date.now()}`,
-    };
-
-    setBuildings((prevBuildings) =>
-      prevBuildings.map((b) => ({
-        ...b,
-        apartments: b.apartments.map((apt) => {
-          if (apt.id === aptId) {
-            const updatedApt = {
-              ...apt,
-              vehicles: [...apt.vehicles, newVehicle],
-            };
-            if (selectedApartment?.id === aptId) {
-              setSelectedApartment(updatedApt);
-            }
-            return updatedApt;
-          }
-          return apt;
-        }),
-      }))
-    );
-  };
-
-  const removeVehicleFromApartment = (aptId: string, vehicleId: string) => {
-    setBuildings((prevBuildings) =>
-      prevBuildings.map((b) => ({
-        ...b,
-        apartments: b.apartments.map((apt) => {
-          if (apt.id === aptId) {
-            const updatedApt = {
-              ...apt,
-              vehicles: apt.vehicles.filter((v) => v.id !== vehicleId),
-            };
-            if (selectedApartment?.id === aptId) {
-              setSelectedApartment(updatedApt);
-            }
-            return updatedApt;
-          }
-          return apt;
-        }),
-      }))
-    );
-  };
-
-  const addGarageSpotToApartment = (aptId: string, spotData: Omit<GarageSpot, 'id'>) => {
-    const newSpot: GarageSpot = {
-      ...spotData,
-      id: `grg-${Date.now()}`,
-    };
-
-    setBuildings((prevBuildings) =>
-      prevBuildings.map((b) => ({
-        ...b,
-        apartments: b.apartments.map((apt) => {
-          if (apt.id === aptId) {
-            const updatedApt = {
-              ...apt,
-              garageSpots: [...apt.garageSpots, newSpot],
-            };
-            if (selectedApartment?.id === aptId) {
-              setSelectedApartment(updatedApt);
-            }
-            return updatedApt;
-          }
-          return apt;
-        }),
-      }))
-    );
-  };
-
-  const toggleStaffDuty = (staffId: string) => {
-    setStaff((prev) =>
-      prev.map((s) => (s.id === staffId ? { ...s, isOnDuty: !s.isOnDuty } : s))
-    );
-  };
-
-  const createMaintenanceTicket = (ticketData: Omit<MaintenanceTicket, 'id' | 'createdAt'>) => {
-    const newTicket: MaintenanceTicket = {
-      ...ticketData,
-      id: `tkt-${Date.now()}`,
-      createdAt: new Date().toLocaleString('ar-IQ'),
-    };
-    setTickets((prev) => [newTicket, ...prev]);
-  };
-
-  const updateTicketStatus = (ticketId: string, status: MaintenanceTicket['status']) => {
-    setTickets((prev) =>
-      prev.map((t) => (t.id === ticketId ? { ...t, status } : t))
-    );
-  };
-
-  const toggleServiceAvailability = (serviceId: string) => {
-    setServices((prev) =>
-      prev.map((s) => (s.id === serviceId ? { ...s, isAvailable: !s.isAvailable } : s))
-    );
-  };
-
-  return (
-    <AppContext.Provider
-      value={{
-        currentRole,
-        setCurrentRole,
-        buildings,
-        services,
-        staff,
-        tickets,
-        selectedBuildingId,
-        setSelectedBuildingId,
-        selectedApartment,
-        setSelectedApartment,
-        updateApartmentOccupancy,
-        registerApartmentSale,
-        addVehicleToApartment,
-        removeVehicleFromApartment,
-        addGarageSpotToApartment,
-        addStaffMember,
-        removeStaffMember,
-        toggleStaffDuty,
-        createMaintenanceTicket,
-        updateTicketStatus,
-        toggleServiceAvailability,
-        resetToEmptyState,
-      }}
-    >
-      {children}
-    </AppContext.Provider>
+  // Runs a mutation, surfaces its error, then reloads data from the database.
+  const run = useCallback(
+    async <T,>(fn: () => Promise<T>): Promise<T> => {
+      setError(null);
+      try {
+        return await fn();
+      } catch (e) {
+        setError((e as Error).message);
+        throw e;
+      } finally {
+        await refresh();
+      }
+    },
+    [refresh],
   );
+
+  const selectedApartment = useMemo(() => {
+    if (!selectedApartmentId) return null;
+    const all = buildings.flatMap((b) => b.apartments);
+    return all.find((a) => a.id === selectedApartmentId) ?? (myApartment?.id === selectedApartmentId ? myApartment : null);
+  }, [buildings, myApartment, selectedApartmentId]);
+
+  const value: AppContextType = {
+    me,
+    loading,
+    error,
+    setError,
+    buildings,
+    myApartment,
+    services,
+    staff,
+    tickets,
+    summary,
+    selectedBuildingId,
+    setSelectedBuildingId,
+    selectedApartment,
+    setSelectedApartment: (apt) => setSelectedApartmentId(apt?.id ?? null),
+    refresh,
+    registerApartmentSale: (input) =>
+      run(async () => (await api<{ credentials: Credentials }>('/api/sales', { method: 'POST', body: input })).credentials),
+    updateApartmentOccupancy: (aptId, status) =>
+      run(() => api(`/api/apartments/${aptId}/occupancy`, { method: 'POST', body: { status } })).then(() => {}),
+    addVehicleToApartment: (aptId, v) =>
+      run(() => api(`/api/apartments/${aptId}/vehicles`, { method: 'POST', body: v })).then(() => {}),
+    removeVehicleFromApartment: (vehicleId) => run(() => api(`/api/vehicles/${vehicleId}`, { method: 'DELETE' })).then(() => {}),
+    addGarageSpotToApartment: (aptId, g) =>
+      run(() => api(`/api/apartments/${aptId}/garage`, { method: 'POST', body: g })).then(() => {}),
+    payInstallment: (id) => run(() => api(`/api/installments/${id}/pay`, { method: 'POST' })).then(() => {}),
+    payCharge: (id) => run(() => api(`/api/charges/${id}/pay`, { method: 'POST' })).then(() => {}),
+    generateCharges: (period) => run(() => api('/api/billing/charges', { method: 'POST', body: { period } })),
+    addStaffMember: (input) =>
+      run(async () => (await api<{ credentials: Credentials }>('/api/staff', { method: 'POST', body: input })).credentials),
+    removeStaffMember: (id) => run(() => api(`/api/staff/${id}`, { method: 'DELETE' })).then(() => {}),
+    toggleStaffDuty: (id) => run(() => api(`/api/staff/${id}/duty`, { method: 'POST' })).then(() => {}),
+    toggleServiceAvailability: (id) => {
+      const s = services.find((x) => x.id === id);
+      return run(() => api(`/api/services/${id}`, { method: 'PATCH', body: { isAvailable: !s?.isAvailable } })).then(() => {});
+    },
+    createMaintenanceTicket: (t) => run(() => api('/api/tickets', { method: 'POST', body: t })).then(() => {}),
+    updateTicketStatus: (id, status) => run(() => api(`/api/tickets/${id}`, { method: 'PATCH', body: { status } })).then(() => {}),
+  };
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
 export function useApp() {

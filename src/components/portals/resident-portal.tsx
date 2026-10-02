@@ -4,10 +4,15 @@ import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { User, Car, ParkingSquare, CreditCard, ShieldCheck, Plus, CheckCircle2, Wrench, FileText, BadgeCheck, Home } from 'lucide-react';
 
-export function ResidentPortal() {
-  const { buildings, addVehicleToApartment, removeVehicleFromApartment, createMaintenanceTicket } = useApp();
+const TICKET_LABEL = {
+  PENDING: 'قيد الانتظار',
+  IN_PROGRESS: 'قيد التنفيذ',
+  RESOLVED: 'تم الإنجاز',
+  CANCELLED: 'ملغي',
+} as const;
 
-  const soldApartment = buildings.flatMap((b) => b.apartments).find((a) => a.isSold && a.contractOwner);
+export function ResidentPortal() {
+  const { myApartment: soldApartment, loading, tickets, addVehicleToApartment, removeVehicleFromApartment, createMaintenanceTicket, updateTicketStatus } = useApp();
 
   // Forms
   const [newPlate, setNewPlate] = useState('');
@@ -18,16 +23,18 @@ export function ResidentPortal() {
   const [ticketDesc, setTicketDesc] = useState('');
   const [ticketSubmitted, setTicketSubmitted] = useState(false);
 
+  if (loading) {
+    return <div className="p-8 text-center text-gray-400">جاري التحميل...</div>;
+  }
+
   if (!soldApartment || !soldApartment.contractOwner) {
     return (
       <div className="glass-card p-12 text-center rounded-3xl border border-slate-800 my-8 space-y-4">
         <div className="w-16 h-16 rounded-full bg-purple-500/10 text-purple-400 flex items-center justify-center mx-auto border border-purple-500/20">
           <Home className="w-8 h-8" />
         </div>
-        <h3 className="text-xl font-black text-white">لم يتم تسجيل أي شقة مباعة أو ساكن بعد</h3>
-        <p className="text-sm text-gray-400 max-w-md mx-auto">
-          قم بالتبديل إلى لوحة <strong>"المالك / الأدمن"</strong> في شريط التنقل العلوي واستخدم زر <strong>"تسجيل بيع / تأجير شقة"</strong> لإدخال ساكن جديد واختبار هذه الشاشة.
-        </p>
+        <h3 className="text-xl font-black text-white">حسابك غير مرتبط بشقة حالياً</h3>
+        <p className="text-sm text-gray-400 max-w-md mx-auto">يرجى مراجعة إدارة المجمع لربط حسابك بالشقة الخاصة بك.</p>
       </div>
     );
   }
@@ -35,39 +42,38 @@ export function ResidentPortal() {
   const myApartment = soldApartment;
   const owner = soldApartment.contractOwner;
 
-  const handleAddVehicle = (e: React.FormEvent) => {
+  const OCCUPANCY_LABEL = {
+    OWNER_OCCUPIED: 'مسكونة بواسطة المالك (الاشتراكات مفعّلة)',
+    RENTED: 'مستأجرة ومسكونة (الاشتراكات مفعّلة)',
+    VACANT_SOLD: 'مباعة وفارغة (الاشتراكات متوقفة)',
+    VACANT_UNSOLD: 'غير مباعة',
+  } as const;
+
+  const handleAddVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPlate || !newModel) return;
-
-    addVehicleToApartment(myApartment.id, {
-      apartmentId: myApartment.id,
-      plateNumber: newPlate,
-      makeModel: newModel,
-      color: newColor || 'غير محدد',
-      rfidBadgeCode: `RFID-RES-${Math.floor(100000 + Math.random() * 900000)}`,
-    });
-
-    setNewPlate('');
-    setNewModel('');
-    setNewColor('');
+    try {
+      await addVehicleToApartment(myApartment.id, { plateNumber: newPlate, makeModel: newModel, color: newColor || undefined });
+      setNewPlate('');
+      setNewModel('');
+      setNewColor('');
+    } catch {
+      // error shown via store
+    }
   };
 
-  const handleCreateTicket = (e: React.FormEvent) => {
+  const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ticketTitle || !ticketDesc) return;
-
-    createMaintenanceTicket({
-      apartmentId: myApartment.id,
-      apartmentCode: myApartment.sequentialCode,
-      title: ticketTitle,
-      description: ticketDesc,
-      status: 'PENDING',
-    });
-
-    setTicketTitle('');
-    setTicketDesc('');
-    setTicketSubmitted(true);
-    setTimeout(() => setTicketSubmitted(false), 3000);
+    try {
+      await createMaintenanceTicket({ title: ticketTitle, description: ticketDesc });
+      setTicketTitle('');
+      setTicketDesc('');
+      setTicketSubmitted(true);
+      setTimeout(() => setTicketSubmitted(false), 3000);
+    } catch {
+      // error shown via store
+    }
   };
 
   return (
@@ -96,8 +102,8 @@ export function ResidentPortal() {
 
         <div className="bg-slate-900 px-4 py-2.5 rounded-2xl border border-slate-800 text-xs text-right space-y-1">
           <span className="text-gray-400 block">حالة الشقة الحالية:</span>
-          <span className="font-black text-green-400 flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4" /> مسكونة بواسطة المالك (الاشتراكات مفعّلة)
+          <span className={`font-black flex items-center gap-1.5 ${myApartment.isOccupied ? 'text-green-400' : 'text-amber-400'}`}>
+            <CheckCircle2 className="w-4 h-4" /> {OCCUPANCY_LABEL[myApartment.occupancyStatus]}
           </span>
         </div>
       </div>
@@ -127,7 +133,7 @@ export function ResidentPortal() {
                     {v.rfidBadgeCode}
                   </span>
                   <button
-                    onClick={() => removeVehicleFromApartment(myApartment.id, v.id)}
+                    onClick={() => removeVehicleFromApartment(v.id).catch(() => {})}
                     className="text-[11px] text-red-400 hover:underline mt-1 inline-block"
                   >
                     حذف السيارة
@@ -227,6 +233,77 @@ export function ResidentPortal() {
         </div>
 
       </div>
+
+      {/* Installments & unpaid bills */}
+      <div className="glass-card p-6 rounded-3xl space-y-4">
+        <h3 className="text-base font-black text-white flex items-center gap-2">
+          <CreditCard className="w-5 h-5 text-amber-400" /> الأقساط والمستحقات
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+            <span className="text-gray-400 block mb-1">نظام الدفع</span>
+            <span className="font-black text-white">{myApartment.paymentType === 'INSTALLMENTS' ? 'أقساط' : 'دفعة كاملة'}</span>
+          </div>
+          <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+            <span className="text-gray-400 block mb-1">المدفوع من الأقساط</span>
+            <span className="font-black text-green-400">${myApartment.financials.paidInstallments.toLocaleString()}</span>
+          </div>
+          <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+            <span className="text-gray-400 block mb-1">المتبقي</span>
+            <span className="font-black text-amber-400">${myApartment.financials.remainingInstallments.toLocaleString()}</span>
+          </div>
+          <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+            <span className="text-gray-400 block mb-1">القسط القادم</span>
+            <span className="font-black text-white">{myApartment.financials.nextDueDate ?? '—'}</span>
+          </div>
+        </div>
+        {myApartment.unpaidCharges.length > 0 && (
+          <div className="space-y-2">
+            <h4 className="text-xs font-bold text-red-400">فواتير اشتراك غير مدفوعة (${myApartment.financials.unpaidChargesTotal})</h4>
+            {myApartment.unpaidCharges.map((c) => (
+              <div key={c.id} className="flex justify-between bg-slate-900/80 p-3 rounded-xl border border-slate-800 text-xs">
+                <span className="text-white">{c.serviceName} - {c.period}</span>
+                <span className="font-black text-red-400">${c.amount}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {myApartment.installments.length > 0 && (
+          <div className="max-h-64 overflow-y-auto space-y-1.5">
+            {myApartment.installments.map((i) => (
+              <div key={i.id} className="flex justify-between bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 text-xs">
+                <span className="text-white">القسط {i.sequenceNumber} - {i.dueDate}</span>
+                <span className={i.isPaid ? 'text-green-400 font-bold' : 'text-amber-400 font-bold'}>
+                  ${i.amount.toLocaleString()} {i.isPaid ? '✓ مدفوع' : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* My tickets */}
+      {tickets.length > 0 && (
+        <div className="glass-card p-6 rounded-3xl space-y-3">
+          <h3 className="text-base font-black text-white">بلاغات الصيانة الخاصة بشقتك</h3>
+          {tickets.map((t) => (
+            <div key={t.id} className="flex items-center justify-between bg-slate-900/80 p-3 rounded-xl border border-slate-800 text-xs">
+              <div>
+                <span className="font-bold text-white block">{t.title}</span>
+                <span className="text-gray-400">
+                  {TICKET_LABEL[t.status]}
+                  {t.workerName ? ` - ${t.workerName}` : ''}
+                </span>
+              </div>
+              {t.status === 'PENDING' && (
+                <button onClick={() => updateTicketStatus(t.id, 'CANCELLED').catch(() => {})} className="text-red-400 hover:underline">
+                  إلغاء
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Maintenance Request Form */}
       <div className="glass-card p-6 rounded-3xl space-y-4">

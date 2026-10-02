@@ -8,6 +8,14 @@ export type OccupancyStatus = 'VACANT_UNSOLD' | 'VACANT_SOLD' | 'OWNER_OCCUPIED'
 
 export type TicketStatus = 'PENDING' | 'IN_PROGRESS' | 'RESOLVED' | 'CANCELLED';
 
+export interface Me {
+  id: string;
+  role: Role;
+  fullName: string;
+  email: string;
+  apartmentId: string | null;
+}
+
 export interface Vehicle {
   id: string;
   apartmentId: string;
@@ -35,8 +43,6 @@ export interface ResidentProfile {
   gender: string;
   avatarUrl?: string;
   isContractOwner: boolean;
-  idCardPhotoUrl?: string;
-  residenceCardUrl?: string;
   hasAccessBadge: boolean;
   badgeCode?: string;
   familyMembersCount: number;
@@ -45,18 +51,28 @@ export interface ResidentProfile {
 export interface Installment {
   id: string;
   apartmentId: string;
+  sequenceNumber: number;
   dueDate: string;
   amount: number;
   isPaid: boolean;
   paidAt?: string;
 }
 
+export interface UnpaidCharge {
+  id: string;
+  period: string;
+  amount: number;
+  serviceName: string;
+}
+
 export interface Service {
   id: string;
+  code: string;
   name: string;
   monthlyPrice: number;
   isAvailable: boolean;
-  subscribedCount?: number;
+  isDefault: boolean;
+  subscribedCount: number;
 }
 
 export interface Subscription {
@@ -80,13 +96,14 @@ export interface MaintenanceTicket {
   createdAt: string;
 }
 
-export interface StaffProfile {
+export interface StaffMember {
   id: string;
   fullName: string;
   email: string;
   phone: string;
   gender: string;
   avatarUrl?: string;
+  role: Role;
   department: string;
   isOnDuty: boolean;
 }
@@ -101,6 +118,8 @@ export interface Apartment {
   isSold: boolean;
   price: number;
   paymentType?: PaymentType;
+  downPayment: number | null;
+  installmentMonths: number | null;
   occupancyStatus: OccupancyStatus;
   isOccupied: boolean; // Triggers Subscription Eligibility
   contractOwner?: ResidentProfile;
@@ -108,6 +127,14 @@ export interface Apartment {
   garageSpots: GarageSpot[];
   subscriptions: Subscription[];
   installments: Installment[];
+  unpaidCharges: UnpaidCharge[];
+  financials: {
+    paidInstallments: number;
+    remainingInstallments: number;
+    overdueInstallments: number;
+    nextDueDate: string | null;
+    unpaidChargesTotal: number;
+  };
 }
 
 export interface Building {
@@ -119,4 +146,20 @@ export interface Building {
   apartmentsPerFloor: number;
   totalApartments: number;
   apartments: Apartment[];
+}
+
+export interface FinancialSummary {
+  soldApartments: number;
+  totalSalesValue: number;
+  totalCollected: number;
+  collected: Record<string, { amount: number; count: number }>;
+  outstandingInstallments: { amount: number; count: number };
+  overdueInstallments: { amount: number; count: number };
+  unpaidSubscriptionCharges: { amount: number; count: number };
+  paidSubscriptionCharges: { amount: number; count: number };
+}
+
+export interface Credentials {
+  email: string;
+  temporaryPassword: string;
 }
